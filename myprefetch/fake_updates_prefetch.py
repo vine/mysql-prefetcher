@@ -14,7 +14,8 @@ def main():
     parser = argparse.ArgumentParser(description="""
 This prefetcher will be utilizing fake changes support within InnoDB -
 so it can execute statements without much rewriting.""".strip(),
-                                     fromfile_prefix_chars='@')
+                                     fromfile_prefix_chars='@',
+                                     formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     parser.add_argument('--host', default='localhost', help='MySQL server hostname')
     parser.add_argument('--port', default=3306, type=int, help='MySQL server port')
     parser.add_argument('--username', '-u', default='root', help='MySQL username')
