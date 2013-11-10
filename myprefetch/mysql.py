@@ -15,20 +15,25 @@
 #   limitations under the License.
 #
 
-
+import collections
+import logging
 import time
 import sys
-import config
 import _mysql
 import MySQLdb
 import MySQLdb.constants.CLIENT as CL
 
-Error = MySQLdb.DatabaseError
+logger = logging.getLogger(__name__)
 
-class MySQL:
+Error = MySQLdb.Error
+
+Config = collections.namedtuple('Config', ['host', 'port', 'username', 'password'])
+
+class MySQL(object):
     _conn = None
 
-    def __init__(self, init_connect=None):
+    def __init__(self, config, init_connect=None):
+        self.config = config
         self.init_connect = init_connect
 
     """ Basic MySQL connection functionality """
@@ -38,20 +43,21 @@ class MySQL:
         while self._conn == None:
             try:
                 self._conn = _mysql.connect(
-                    user=config.username,
-                    passwd=config.password,
-                    port=config.port,
-                    host=config.host,
+                    user=self.config.username,
+                    passwd=self.config.password,
+                    port=self.config.port,
+                    host=self.config.host,
                     init_command="SET SESSION wait_timeout=5",
                     client_flag=CL.MULTI_STATEMENTS | CL.MULTI_RESULTS
                 )
                 if self.init_connect:
-                    self.q(self.init_connect)
+                    self._conn.query(self.init_connect)
             except MemoryError:
-                print sys.exc_info()
+                logger.exception("Failed to connect to %s", self.config)
                 sys.exit(1)
             except MySQLdb.Error:
-                print sys.exc_info()
+                logger.exception("Failed to connect to %s", self.config)
+                self._conn = None
                 time.sleep(1)
 
     def q(self, query, use_result=True):
@@ -65,6 +71,7 @@ class MySQL:
                 self._conn.query(query)
                 break  # if successful
             except MySQLdb.OperationalError:
+                logger.exception("Failed to send query [%s], retrying", query)
                 if attempt:
                     self.reconnect()
                     continue
@@ -97,6 +104,6 @@ class MySQL:
             return
 
 if __name__ == "__main__":
-    print MySQL().q("SELECT 'everything'; SET @a=1; "
-                    "SELECT 1 FROM dual WHERE NULL; SELECT 'is'; SELECT 'ok'")
+    print MySQL(Config(sys.argv)).q("SELECT 'everything'; SET @a=1; "
+                                    "SELECT 1 FROM dual WHERE NULL; SELECT 'is'; SELECT 'ok'")
 

@@ -15,28 +15,24 @@
 #   limitations under the License.
 #
 
-import sys
+import logging
 import os
-import mysql
-import traceback
+import Queue
+import re
+import sys
+from threading import Thread
 import time
 
-from threading import Thread
-import Queue
-from binlog import Binlog
-import rewriters
-import re
+from myprefetch import mysql, rewriters
+from myprefetch.binlog import Binlog
 
 # Return whole string after multiple comment groups
-initial_comment_re = re.compile("^\s*(/\*.*?\*/\s*)*(.*)")
+initial_comment_re = re.compile(r"^\s*(/\*.*?\*/\s*)*(.*)")
 def strip_initial_comment(query):
     return initial_comment_re.findall(query)[-1][-1]
 
 
-# Debugging output
-def d(s):
-    # print "DEBUG:", s
-    pass
+logger = logging.getLogger(__name__)
 
 
 class Executor (object):
@@ -60,8 +56,8 @@ class Slave (mysql.MySQL):
 
 class Runner(Thread):
     """Worker thread that runs events placed on a queue"""
-    def __init__(self, prefetcher):
-        self.db = None
+    def __init__(self, db, prefetcher):
+        self.db = db
         self.queue = prefetcher.queue
         self.detect = prefetcher.detect
         Thread.__init__(self)
@@ -69,9 +65,6 @@ class Runner(Thread):
 
     def run(self):
         try:
-            if not self.db:
-                self.db = Slave()
-
             while True:
                 event = self.queue.get(block=True)
                 rewriter = self.detect(event)
@@ -96,31 +89,36 @@ class Runner(Thread):
 
                 except mysql.Error:
                     self.db.q("ROLLBACK")
-        except:
-            traceback.print_exc()
+        except Exception:
+            logger.exception("Exception while running.")
+            sys.stdout.flush()
             os.kill(os.getpid(), 9)
 
 
-class Prefetch:
+class Prefetch(object):
     """Main prefetching chassis"""
-    def __init__(self):
+    def __init__(self, config, runners=4, threshold=1.0, window_start=1, window_stop=240,
+                 elapsed_limit=4, logpath="/var/lib/mysql", frequency=10,
+                 strip_comments=False):
+        # The mysql Config object to use for connection
+        self.config = config
         # Number of runner threads
-        self.runners = 4
+        self.runners = runners
         # How much do we lag before we step in
-        self.threshold = 1.0
+        self.threshold = threshold
         # how much do we jump to future from actual execution (in seconds)
-        self.window_start = 1
+        self.window_start = window_start
         # how much ahead we actually work (in seconds)
-        self.window_stop = 240
+        self.window_stop = window_stop
         # Time limit (seconds) - based on elapsed time on master,
         # should we try prefetching
-        self.elapsed_limit = 4
+        self.elapsed_limit = elapsed_limit
         # Where are all the logs
-        self.logpath = "/var/lib/mysql/"
+        self.logpath = logpath
         # How often should checks run (hz)
-        self.frequency = 10
+        self.frequency = frequency
         # Should comments be stripped from query inside event
-        self.strip_comments = False
+        self.strip_comments = strip_comments
         # Custom rewriters for specific queries
         self.prefixes = [
           # ("INSERT INTO customtable", rewriters.custom_table_rewriter),
@@ -159,18 +157,21 @@ class Prefetch:
         binlog.seek(pos)
         return binlog
 
+    def _connect(self):
+        return Slave(self.config, init_connect=self.worker_init_connect)
+
     def prefetch(self):
         """Main service routine to glue everything together"""
-        slave = Slave(init_connect=self.worker_init_connect)
+        slave = self._connect()
         prefetched = None
         cycles_count = 0
 
         self.queue = Queue.Queue(self.runners * 4)
-        for thread in range(self.runners):
-            Runner(self).start()
+        for _ in range(self.runners):
+            Runner(self._connect(), self).start()
 
         while True:
-            d("Running prefetch check")
+            logger.debug("Running prefetch check")
 
             st = slave.slave_status()
             if not st or st['Slave_SQL_Running'] != "Yes":
@@ -180,12 +181,13 @@ class Prefetch:
                     time.sleep(10)
                     continue
 
+            lag = 0
             if st['Seconds_Behind_Master'] is not None:
                 # We compensate for negative lag here
                 lag = max(int(st['Seconds_Behind_Master']), 0)
 
                 if lag <= self.threshold:
-                    d("Skipping for now, lag is below threshold")
+                    logger.info("Skipping for now, lag is below threshold")
                     slave.sleep(1.0 / self.frequency,
                                 "Lag (%d) is below threshold (%d)" % \
                                 (lag, self.threshold))
@@ -206,7 +208,7 @@ class Prefetch:
             if prefetched and prefetched['file'] == binlog.filename and \
                     prefetched['pos'] > event.pos:
 
-                d("Jump to %d" % prefetched['pos'])
+                logger.debug("Jump to %d", prefetched['pos'])
                 binlog.seek(prefetched['pos'])
 
             # Iterate through the stuff in front
@@ -215,39 +217,39 @@ class Prefetch:
                     continue
                 # Skip few entries, leave them for SQL thread
                 if event.timestamp < sql_time + self.window_start:
-                    d("Skipping, too close to SQL thread")
+                    logger.debug("Skipping, too close to SQL thread")
                     continue
 
                 if event.timestamp > sql_time + self.window_stop:
-                    d("Breaking, too far from SQL thread")
+                    logger.debug("Breaking, too far from SQL thread")
                     break
 
                 if event.elapsed > self.elapsed_limit:
-                    d("Skipping, elapsed too long")
+                    logger.debug("Skipping, elapsed too long")
                     continue
 
                 try:
                     self.queue.put(event, block=True, timeout=1)
                 except Queue.Full:
-                    d("Queue full, breaking out of binlog")
+                    logger.debug("Queue full, breaking out of binlog")
                     break
                 cycles_count += 1
                 if not cycles_count % 10000:
                     break
 
-            d("Got ahead to %d" % binlog.position)
+            logger.info("Currently %d seconds behind, prefetch up to %d", lag, binlog.position)
             prefetched = {'pos': binlog.position, 'file': binlog.filename}
-            slave.sleep(1.0 / self.frequency,
-                "Got ahead to %d" % binlog.position)
+            slave.sleep(1.0 / self.frequency, "Got ahead to %d" % binlog.position)
 
     def run(self):
         try:
             self.prefetch()
-        except:
-            traceback.print_exc()
-            sys.exit()
+        except Exception:
+            logger.exception("Exception while prefetching.")
+            raise
 
 if __name__ == "__main__":
     """As standalone application it will start rollback-based prefetcher"""
-    Prefetch().run()
+    from myprefetch.mysql import Config
+    Prefetch(Config(sys.argv)).run()
 

@@ -47,14 +47,14 @@ INCIDENT_EVENT = 26
 HEARTBEAT_LOG_EVENT = 27
 
 class MalformedBinlogException (ValueError):
-        pass
+    pass
 
 class Event(object):
     """Fixed wrapper for event data"""
-    def __init__(self, pos, type, db, query, timestamp,
+    def __init__(self, pos, type_, db, query, timestamp,
                  elapsed, insert_id, last_insert_id):
         self.pos = pos
-        self.type = type
+        self.type = type_
         self.db = db
         self.query = query
         self.timestamp = timestamp

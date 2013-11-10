@@ -22,19 +22,19 @@ all of them can return a string query, list of strings or None
 """
 
 def rollback(event):
-   """ Default method which executes statements with a rollback at the end """
-   query = ""
-   if event.db:
-       query += "USE %s;" % event.db
+    """ Default method which executes statements with a rollback at the end """
+    query = ""
+    if event.db:
+        query += "USE %s;" % event.db
 
-   if event.insert_id != None:
-       query += "SET INSERT_ID=%d; " % event.insert_id
-   if event.last_insert_id != None:
-       query += "SET LAST_INSERT_ID=%d; " % event.last_insert_id
+    if event.insert_id != None:
+        query += "SET INSERT_ID=%d; " % event.insert_id
+    if event.last_insert_id != None:
+        query += "SET LAST_INSERT_ID=%d; " % event.last_insert_id
 
-   query += "/* pos:%d */ " % event.pos
-   query += event.query
-   return "ROLLBACK; BEGIN; %s; ROLLBACK" % query
+    query += "/* pos:%d */ " % event.pos
+    query += event.query
+    return "ROLLBACK; BEGIN; %s; ROLLBACK" % query
 
 def fake_update(event):
     """ Execute queries, assuming that server won't do anything,
