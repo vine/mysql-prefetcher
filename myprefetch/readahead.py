@@ -88,6 +88,7 @@ class Runner(Thread):
                                     (event.pos, query))
 
                 except mysql.Error:
+                    logger.debug("Exception while running.", exc_info=True)
                     self.db.q("ROLLBACK")
         except Exception:
             logger.exception("Exception while running.")
@@ -132,12 +133,13 @@ class Prefetch(object):
 
     def detect(self, event):
         """Return rewriting method for event"""
-        if event.query in (None, "", "BEGIN", "COMMIT", "ROLLBACK"):
+        query = strip_initial_comment(event.query).strip()
+        if not query or not any(query.upper().startswith(x)
+                                for x in ("SELECT", "INSERT", "UPDATE", "REPLACE", "DELETE")):
             return None
 
         # Allow custom per-prefix rewriter
         if self.prefixes:
-            query = strip_initial_comment(event.query)
             if self.strip_comments:
                 event.query = query
             for prefix, rewriter in self.prefixes:
@@ -182,16 +184,19 @@ class Prefetch(object):
                     continue
 
             lag = 0
-            if st['Seconds_Behind_Master'] is not None:
-                # We compensate for negative lag here
-                lag = max(int(st['Seconds_Behind_Master']), 0)
+            if st['Seconds_Behind_Master'] is None:
+                slave.sleep(1.0 / self.frequency, "Slave not running")
+                continue
 
-                if lag <= self.threshold:
-                    logger.info("Skipping for now, lag is below threshold")
-                    slave.sleep(1.0 / self.frequency,
-                                "Lag (%d) is below threshold (%d)" % \
+            # We compensate for negative lag here
+            lag = max(int(st['Seconds_Behind_Master']), 0)
+
+            if lag <= self.threshold:
+                logger.info("Skipping for now, lag is below threshold")
+                slave.sleep(1.0 / self.frequency,
+                            "Lag (%d) is below threshold (%d)" % \
                                 (lag, self.threshold))
-                    continue
+                continue
 
             binlog = self.binlog_from_status(st)
             # Look at where we are

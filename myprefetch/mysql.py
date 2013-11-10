@@ -42,6 +42,7 @@ class MySQL(object):
 
         while self._conn == None:
             try:
+                logger.info("Connecting to server at %s", self.config)
                 self._conn = _mysql.connect(
                     user=self.config.username,
                     passwd=self.config.password,

@@ -9,7 +9,7 @@ from myprefetch.rewriters import fake_update
 from myprefetch.mysql import Config
 
 def main():
-    logging.basicConfig()
+    logging.basicConfig(level=logging.INFO)
 
     parser = argparse.ArgumentParser(description="""
 This prefetcher will be utilizing fake changes support within InnoDB -
