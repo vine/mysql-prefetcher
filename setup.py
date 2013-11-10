@@ -9,14 +9,14 @@ def read(fname):
 
 setup(
     name='myprefetch',
-    version='0.1',
+    version='0.2',
     description='MySQL Replication Prefetcher',
     packages=find_packages(),
     long_description=read('README.md'),
     license=read('LICENSE'),
     url='https://github.com/vine/mysql-prefetcher',
     install_requires=[
-        'MySQL-python',
+        'MySQL-python<=1.2.3',
     ],
     include_package_data=True,
 )
